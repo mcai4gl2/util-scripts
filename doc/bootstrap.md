@@ -26,12 +26,13 @@ The bootstrap script provides automated setup for fresh Ubuntu VMs, installing a
 **Configuration:**
 - Create symlink: `/usr/bin/python` → `/usr/bin/python3`
 - Verify pip is working and up-to-date
-- Create a virtual environment in `~/venv/bootstrap` with `touch` package installed
+- Create a virtual environment in `~/venv/bootstrap` with useful packages (requests, urllib3)
 
 **Rationale:**
 - Many scripts expect `python` command to work
 - Virtual environments prevent system package conflicts
-- `touch` package provides file manipulation utilities
+- `requests` and `urllib3` provide HTTP client functionality
+- File manipulation is available via built-in `pathlib` module
 
 ### 2. Terminal Multiplexer (tmux)
 
@@ -130,7 +131,7 @@ sudo apt upgrade -y
 python3 -m venv ~/venv/bootstrap
 source ~/venv/bootstrap/bin/activate
 pip install --upgrade pip
-pip install touch
+pip install requests urllib3
 ```
 
 ## Error Handling Strategy
@@ -177,14 +178,14 @@ pip install touch
 [INFO] Installing development tools...
 [OK] All development tools installed
 [INFO] Creating Python virtual environment...
-[OK] Virtual environment created with touch package
+[OK] Virtual environment created with useful packages
 [INFO] Running validation tests...
 [OK] All components validated successfully
 
 === Bootstrap Complete ===
 Python: /usr/bin/python3 -> /usr/bin/python
 Tmux: Prefix remapped to Ctrl+A
-Virtual Env: ~/venv/bootstrap (with touch package)
+Virtual Env: ~/venv/bootstrap (with requests, urllib3)
 Tools: git, jq, curl, wget, build-essential
 
 Total time: 2m 34s

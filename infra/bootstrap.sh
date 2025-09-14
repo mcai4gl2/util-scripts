@@ -237,11 +237,11 @@ EOF
     info "Upgrading pip in virtual environment..."
     pip install --upgrade pip -q
     
-    info "Installing touch package in virtual environment..."
-    pip install touch -q
+    info "Installing useful packages in virtual environment..."
+    pip install requests urllib3 -q
     
     deactivate
-    success "Virtual environment created with touch package installed"
+    success "Virtual environment created with useful packages installed"
 
     # Step 7: Validation Tests
     step "Validation Tests"
@@ -278,12 +278,13 @@ EOF
     
     # Test virtual environment
     if [ -f "$VENV_DIR/bin/activate" ]; then
-        # Test that touch is installed in venv
+        # Test that packages are installed in venv and pathlib touch works
         source "$VENV_DIR/bin/activate"
-        if python -c "import touch" 2>/dev/null; then
-            success "Virtual environment with touch package validated"
+        if python -c "import requests, urllib3; from pathlib import Path; Path('/tmp/test_touch').touch()" 2>/dev/null; then
+            success "Virtual environment with packages validated (pathlib touch works)"
+            rm -f /tmp/test_touch
         else
-            warning "Virtual environment exists but touch package may not be installed"
+            warning "Virtual environment exists but package validation failed"
         fi
         deactivate
     else
@@ -297,7 +298,7 @@ EOF
     echo -e "${GREEN}=== Installation Summary ===${NC}"
     echo -e "Python: $(python --version 2>&1) (symlinked)"
     echo -e "tmux: Prefix remapped to ${YELLOW}Ctrl+A${NC}"
-    echo -e "Virtual Environment: ${BLUE}$VENV_DIR${NC}"
+    echo -e "Virtual Environment: ${BLUE}$VENV_DIR${NC} (with requests, urllib3)"
     echo -e "Development Tools: git, jq, curl, wget, build-essential"
     echo
     echo -e "${BLUE}Usage Examples:${NC}"
