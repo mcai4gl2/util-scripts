@@ -228,29 +228,54 @@ def get_os_python_info():
 # ----------------------------
 # Benchmarks
 # ----------------------------
+def _cpu_hash_worker(stop_at, seed):
+    """Worker function for CPU hash benchmark - must be at module level for pickling."""
+    rnd = random.Random(seed)
+    ops = 0
+    payload = bytearray(1024)  # 1 KiB blocks
+    while time.time() < stop_at:
+        for i in range(len(payload)):
+            payload[i] = rnd.randrange(256)
+        hashlib.sha256(payload).digest()
+        ops += 1
+    return ops
+
 def bench_cpu_hash(duration, threads):
     """
     CPU "IOPS-like": count how many SHA-256 operations we can do.
     Parallelized with processes (if threads>1) for CPU-bound work.
     """
-    def worker(stop_at, seed):
-        rnd = random.Random(seed)
-        ops = 0
-        payload = bytearray(1024)  # 1 KiB blocks
-        while time.time() < stop_at:
-            for i in range(len(payload)):
-                payload[i] = rnd.randrange(256)
-            hashlib.sha256(payload).digest()
-            ops += 1
-        return ops
-
     stop_at = time.time() + duration
     seeds = [random.randrange(1<<30) for _ in range(threads)]
     with cf.ProcessPoolExecutor(max_workers=threads) as ex:
-        futs = [ex.submit(worker, stop_at, s) for s in seeds]
+        futs = [ex.submit(_cpu_hash_worker, stop_at, s) for s in seeds]
         ops = sum(f.result() for f in futs)
     ops_per_sec = ops / duration
     return {"ops": ops, "ops_per_sec": ops_per_sec, "block_size_bytes": 1024, "duration_s": duration, "workers": threads}
+
+def _memory_rand_access_worker(stop_at, sz, seed):
+    """Worker function for memory random access benchmark."""
+    rnd = random.Random(seed)
+    buf = bytearray(sz)
+    n = len(buf)
+    ops = 0
+    while time.time() < stop_at:
+        for _ in range(64):
+            i = rnd.randrange(n)
+            buf[i] = (buf[i] + 1) & 0xFF
+            ops += 1
+    return ops
+
+def _seq_copy_bandwidth(sz):
+    """Sequential copy bandwidth test."""
+    a = bytearray(sz)
+    b = bytearray(sz)
+    start = time.time()
+    chunk = 1 << 20  # 1 MiB
+    for i in range(0, sz, chunk):
+        b[i:i+chunk] = a[i:i+chunk]
+    dt = time.time() - start
+    return (sz / (1024*1024)) / dt if dt > 0 else float('inf')
 
 def bench_memory(duration, size_mb, threads):
     """
@@ -259,37 +284,15 @@ def bench_memory(duration, size_mb, threads):
     size_bytes = size_mb * 1024 * 1024
     per_worker = max(1, size_bytes // threads)
 
-    def rand_access(stop_at, sz, seed):
-        rnd = random.Random(seed)
-        buf = bytearray(sz)
-        n = len(buf)
-        ops = 0
-        while time.time() < stop_at:
-            for _ in range(64):
-                i = rnd.randrange(n)
-                buf[i] = (buf[i] + 1) & 0xFF
-                ops += 1
-        return ops
-
-    def seq_copy_bandwidth(sz):
-        a = bytearray(sz)
-        b = bytearray(sz)
-        start = time.time()
-        chunk = 1 << 20  # 1 MiB
-        for i in range(0, sz, chunk):
-            b[i:i+chunk] = a[i:i+chunk]
-        dt = time.time() - start
-        return (sz / (1024*1024)) / dt if dt > 0 else float('inf')
-
     stop_at = time.time() + duration
     seeds = [random.randrange(1<<30) for _ in range(threads)]
     with cf.ThreadPoolExecutor(max_workers=threads) as ex:
-        futs = [ex.submit(rand_access, stop_at, per_worker, s) for s in seeds]
+        futs = [ex.submit(_memory_rand_access_worker, stop_at, per_worker, s) for s in seeds]
         ops = sum(f.result() for f in futs)
     ops_per_sec = ops / duration
 
     copy_size = min(size_bytes // 2, 512 * 1024 * 1024)
-    copy_bw_mibs = seq_copy_bandwidth(copy_size) if copy_size > 0 else None
+    copy_bw_mibs = _seq_copy_bandwidth(copy_size) if copy_size > 0 else None
 
     return {
         "rand_ops_per_sec": ops_per_sec,
