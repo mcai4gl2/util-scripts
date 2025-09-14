@@ -11,8 +11,18 @@ set -euo pipefail
 SCRIPT_NAME="Ubuntu VM Bootstrap"
 VERSION="1.0"
 LOG_FILE="/tmp/bootstrap.log"
-VENV_DIR="$HOME/venv/bootstrap"
-TMUX_CONF="$HOME/.tmux.conf"
+
+# Detect the actual user (in case script is run with sudo)
+if [ -n "${SUDO_USER:-}" ]; then
+    ACTUAL_USER="$SUDO_USER"
+    ACTUAL_HOME=$(eval echo "~$SUDO_USER")
+else
+    ACTUAL_USER=$(whoami)
+    ACTUAL_HOME="$HOME"
+fi
+
+VENV_DIR="$ACTUAL_HOME/venv/bootstrap"
+TMUX_CONF="$ACTUAL_HOME/.tmux.conf"
 
 # Colors for output
 RED='\033[0;31m'
@@ -81,12 +91,15 @@ main() {
     # Initialize log file
     echo "=== $SCRIPT_NAME v$VERSION ===" > "$LOG_FILE"
     echo "Started at: $(date)" >> "$LOG_FILE"
-    echo "User: $(whoami)" >> "$LOG_FILE"
+    echo "Current user: $(whoami)" >> "$LOG_FILE"
+    echo "Actual user: $ACTUAL_USER" >> "$LOG_FILE"
+    echo "Target home: $ACTUAL_HOME" >> "$LOG_FILE"
     echo "System: $(uname -a)" >> "$LOG_FILE"
     echo >> "$LOG_FILE"
 
     echo -e "${BLUE}=== $SCRIPT_NAME v$VERSION ===${NC}"
     info "Starting bootstrap process..."
+    info "Target user: $ACTUAL_USER (home: $ACTUAL_HOME)"
     info "Log file: $LOG_FILE"
 
     # Step 1: Pre-flight checks
@@ -177,7 +190,7 @@ main() {
     fi
     
     # Create tmux configuration
-    info "Creating tmux configuration with Ctrl+A prefix..."
+    info "Creating tmux configuration with Ctrl+A prefix at: $TMUX_CONF"
     cat > "$TMUX_CONF" << 'EOF'
 # Ubuntu VM Bootstrap tmux configuration
 # Prefix changed from Ctrl+B to Ctrl+A
@@ -217,7 +230,14 @@ set -g status-interval 1
 EOF
     
     chmod 644 "$TMUX_CONF"
-    success "tmux configured with Ctrl+A prefix"
+    
+    # Verify tmux config was created
+    if [ -f "$TMUX_CONF" ] && [ -s "$TMUX_CONF" ]; then
+        success "tmux configured with Ctrl+A prefix ($(wc -l < "$TMUX_CONF") lines written)"
+    else
+        error "Failed to create tmux configuration file at $TMUX_CONF"
+        exit 1
+    fi
 
     # Step 6: Create Python Virtual Environment
     step "Python Virtual Environment Setup"
@@ -275,6 +295,13 @@ EOF
             warning "$tool not found in PATH"
         fi
     done
+    
+    # Test tmux configuration
+    if [ -f "$TMUX_CONF" ] && grep -q "prefix C-a" "$TMUX_CONF" 2>/dev/null; then
+        success "tmux configuration validated (Ctrl+A prefix configured)"
+    else
+        warning "tmux configuration file missing or incomplete"
+    fi
     
     # Test virtual environment
     if [ -f "$VENV_DIR/bin/activate" ]; then
