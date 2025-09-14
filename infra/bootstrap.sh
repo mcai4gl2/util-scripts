@@ -234,6 +234,20 @@ EOF
     # Verify tmux config was created
     if [ -f "$TMUX_CONF" ] && [ -s "$TMUX_CONF" ]; then
         success "tmux configured with Ctrl+A prefix ($(wc -l < "$TMUX_CONF") lines written)"
+        
+        # Test tmux configuration syntax
+        if tmux -f "$TMUX_CONF" list-keys >/dev/null 2>&1; then
+            success "tmux configuration syntax validated"
+        else
+            warning "tmux configuration may have syntax errors"
+        fi
+        
+        # Kill any existing tmux server to ensure new config is used
+        if pgrep -x tmux >/dev/null 2>&1; then
+            info "Killing existing tmux server to apply new configuration..."
+            tmux kill-server 2>/dev/null || true
+        fi
+        
     else
         error "Failed to create tmux configuration file at $TMUX_CONF"
         exit 1
@@ -330,11 +344,15 @@ EOF
     echo
     echo -e "${BLUE}Usage Examples:${NC}"
     echo -e "  Activate venv: ${YELLOW}source $VENV_DIR/bin/activate${NC}"
-    echo -e "  Start tmux: ${YELLOW}tmux${NC} (use Ctrl+A as prefix)"
+    echo -e "  Start tmux: ${YELLOW}tmux${NC} (use ${YELLOW}Ctrl+A${NC} as prefix)"
+    echo -e "  Test tmux prefix: In tmux, try ${YELLOW}Ctrl+A c${NC} (new window)"
+    echo -e "  Reload tmux config: In tmux, press ${YELLOW}Ctrl+A r${NC}"
     echo -e "  Check installations: ${YELLOW}git --version && jq --version${NC}"
     echo
     echo -e "${GREEN}Bootstrap completed successfully!${NC}"
     echo -e "Log file: ${BLUE}$LOG_FILE${NC}"
+    echo
+    echo -e "${YELLOW}Note:${NC} If tmux still uses Ctrl+B, run: ${BLUE}tmux kill-server${NC} then start ${BLUE}tmux${NC} again"
     
     # Final log entry
     log "Bootstrap completed successfully at $(date)"
