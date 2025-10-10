@@ -25,6 +25,7 @@ Python 3.8+ only, no external dependencies.
 import argparse
 import datetime as _dt
 import glob
+import gzip
 import hashlib
 import json
 import os
@@ -192,6 +193,33 @@ def hash_text(text: str) -> str:
     return hashlib.sha256(text.encode(errors="replace")).hexdigest()
 
 
+def parse_cpufreq_default_from_config_text(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """Parse kernel config text to detect default CPUFREQ governor.
+
+    Returns (governor_name_lower, symbol) if found, else (None, None).
+    Matches lines like: CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
+    """
+    if not text:
+        return None, None
+    # Generic regex to capture any DEFAULT_GOV_XXX set to y
+    for line in text.splitlines():
+        m = re.match(r"^CONFIG_CPU_FREQ_DEFAULT_GOV_([A-Z0-9_]+)=y\s*$", line)
+        if m:
+            tag = m.group(1)
+            sym = f"CONFIG_CPU_FREQ_DEFAULT_GOV_{tag}"
+            gov_map = {
+                "PERFORMANCE": "performance",
+                "POWERSAVE": "powersave",
+                "USERSPACE": "userspace",
+                "ONDEMAND": "ondemand",
+                "CONSERVATIVE": "conservative",
+                "SCHEDUTIL": "schedutil",
+            }
+            name = gov_map.get(tag, tag.lower())
+            return name, sym
+    return None, None
+
+
 def collect_kernel(raw: Dict[str, str]) -> Dict[str, Any]:
     uname = platform.uname()
     os_release: Dict[str, str] = {}
@@ -280,6 +308,33 @@ def collect_cpu_numa(raw: Dict[str, str]) -> Dict[str, Any]:
     numactl = sh(["numactl", "-H"]) if shutil_which("numactl") else {"ok": False, "stdout": ""}
     raw["numactl-H.txt"] = numactl.get("stdout", "")
     lscpu_hash = hash_text(lscpu_full.get("stdout", "")) if lscpu_full.get("stdout") else None
+    # Kernel default CPUFREQ governor (from /boot/config-<release>)
+    kernel_default_governor = None
+    kernel_default_symbol = None
+    kernel_default_source = None
+    try:
+        krel = platform.uname().release
+        cfgp = Path(f"/boot/config-{krel}")
+        if cfgp.exists():
+            cfg_text = read_text(cfgp)
+            if cfg_text:
+                gov, sym = parse_cpufreq_default_from_config_text(cfg_text)
+                kernel_default_governor = gov
+                kernel_default_symbol = sym
+                kernel_default_source = str(cfgp)
+        # Fallback: /proc/config.gz
+        if kernel_default_governor is None and Path("/proc/config.gz").exists():
+            try:
+                with gzip.open("/proc/config.gz", "rt", errors="replace") as f:
+                    cfg_text = f.read()
+                gov, sym = parse_cpufreq_default_from_config_text(cfg_text)
+                kernel_default_governor = gov
+                kernel_default_symbol = sym
+                kernel_default_source = "/proc/config.gz"
+            except Exception:
+                pass
+    except Exception:
+        pass
     return {
         "lscpu_raw": lscpu_full.get("stdout"),
         "lscpu_e": lscpu_e.get("stdout"),
@@ -289,6 +344,9 @@ def collect_cpu_numa(raw: Dict[str, str]) -> Dict[str, Any]:
         "intel_pstate_status": intel_pstate_status,
         "cpupower_frequency_info": cpupower_info.get("stdout"),
         "numactl_H": numactl.get("stdout"),
+        "kernel_cpufreq_default_governor": kernel_default_governor,
+        "kernel_cpufreq_default_symbol": kernel_default_symbol,
+        "kernel_cpufreq_default_source": kernel_default_source,
     }
 
 
@@ -661,6 +719,18 @@ def generate_report(d: Dict[str, Any]) -> str:
     intel_p = c.get("intel_pstate_status")
     if intel_p is not None:
         lines.append(f"- Intel P-state: {intel_p}")
+    # Always show kernel default governor line for visibility
+    kdef = c.get("kernel_cpufreq_default_governor")
+    ksym = c.get("kernel_cpufreq_default_symbol")
+    ksrc = c.get("kernel_cpufreq_default_source")
+    disp = kdef if kdef is not None else "unknown"
+    extra = []
+    if ksym:
+        extra.append(ksym)
+    if ksrc:
+        extra.append(f"src={ksrc}")
+    suffix = f" ({', '.join(extra)})" if extra else ""
+    lines.append(f"- Kernel cpufreq default governor: {disp}{suffix}")
     lines.append("")
     lines.append("## Timekeeping")
     lines.append(f"- Clocksource: {t.get('clocksource_current')} (avail: {t.get('clocksource_available')})")
@@ -777,4 +847,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

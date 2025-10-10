@@ -86,7 +86,16 @@ name: eth0
         self.assertIn("Latency System Dump", report)
         self.assertIn("Release: 6.1.0", report)
 
+    def test_parse_cpufreq_default_from_config_text(self):
+        cfg = """
+CONFIG_XYZ=y
+CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
+# CONFIG_CPU_FREQ_DEFAULT_GOV_POWERSAVE is not set
+"""
+        gov, sym = self.mod.parse_cpufreq_default_from_config_text(cfg)
+        self.assertEqual(gov, "performance")
+        self.assertEqual(sym, "CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE")
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -1,5 +1,4 @@
 # Python compiled files and caches
 __pycache__/
-*.py[cod]
-*$py.class
 
+latency_sysdump_*/
