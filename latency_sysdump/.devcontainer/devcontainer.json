@@ -1,0 +1,29 @@
+{
+  "name": "ll-cpp-env",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "BASE_IMG": "debian:12",
+      "GCC_VER": "13",
+      "CLANG_VER": "18"
+    }
+  },
+  "runArgs": [
+    "--shm-size=1g"
+    // "--cpuset-cpus=2-7",
+    // "--cap-add=SYS_NICE", "--cap-add=SYS_ADMIN",
+    // "--device=/dev/ptp0"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "llvm-vs-code-extensions.vscode-clangd",
+        "vadimcn.vscode-lldb"
+      ]
+    }
+  },
+  "remoteUser": "vscode",
+  "postCreateCommand": "g++ --version && clang --version && ldd --version || true"
+}
+
