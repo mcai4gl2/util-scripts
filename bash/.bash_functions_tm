@@ -1,0 +1,38 @@
+tm() {
+  # Smart tmux attach/create/switch
+  # Usage:
+  #   tm               -> attach to most-recent session or create one named after $PWD
+  #   tm <name>        -> attach to or create session <name>
+  local name="${1:-$(basename "$PWD")}"
+
+  if [ -n "$TMUX" ]; then
+    # Inside tmux: switch or create+switch
+    if tmux has-session -t "$name" 2>/dev/null; then
+      tmux switch-client -t "$name"
+    else
+      tmux new-session -d -s "$name" -c "$PWD" && tmux switch-client -t "$name"
+    fi
+    return
+  fi
+
+  # Outside tmux
+  if [ -n "$1" ]; then
+    # Name provided: attach or create
+    if tmux has-session -t "$name" 2>/dev/null; then
+      tmux attach -t "$name"
+    else
+      tmux new -s "$name" -c "$PWD"
+    fi
+  else
+    # No name: try most-recent, else create with $PWD basename
+    if tmux ls >/dev/null 2>&1; then
+      local recent
+      recent="$(tmux ls -F '#{session_last_attached} #{session_name}' 2>/dev/null | sort -nr | awk 'NR==1{print $2}')"
+      if [ -n "$recent" ]; then
+        tmux attach -t "$recent"
+        return
+      fi
+    fi
+    tmux new -s "$name" -c "$PWD"
+  fi
+}

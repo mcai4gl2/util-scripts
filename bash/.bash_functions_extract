@@ -1,0 +1,63 @@
+extract() {
+    local file="$1"
+    local outdir="${2:-.}"  # Default to current directory if not provided
+
+    if [ -z "$file" ]; then
+        echo "Usage: extract <archive> [output_dir]"
+        return 1
+    fi
+
+    if [ ! -f "$file" ]; then
+        echo "Error: '$file' does not exist or is not a file."
+        return 1
+    fi
+
+    # Strip extensions like .tar.gz, .tgz, .zip, etc. for folder name
+    local base="$(basename "$file")"
+    local folder="$base"
+
+    folder="${folder%.tar.gz}"
+    folder="${folder%.tar.bz2}"
+    folder="${folder%.tar.xz}"
+    folder="${folder%.tgz}"
+    folder="${folder%.tbz2}"
+    folder="${folder%.txz}"
+    folder="${folder%.tar}"
+    folder="${folder%.zip}"
+    folder="${folder%.gz}"
+    folder="${folder%.bz2}"
+    folder="${folder%.xz}"
+
+    # Final target path = output dir + folder name
+    local target="$outdir/$folder"
+
+    if [ -d "$target" ]; then
+        echo "Folder '$target' already exists. Skipping extraction."
+        return 0
+    fi
+
+    mkdir -p "$target" || {
+        echo "Failed to create directory '$target'."
+        return 1
+    }
+
+    echo "Extracting '$file' into '$target'..."
+
+    case "$file" in
+        *.tar.gz|*.tgz)   tar -xzf "$file" -C "$target" ;;
+        *.tar.bz2|*.tbz2) tar -xjf "$file" -C "$target" ;;
+        *.tar.xz|*.txz)   tar -xJf "$file" -C "$target" ;;
+        *.tar)           tar -xf "$file" -C "$target" ;;
+        *.zip)           unzip -q "$file" -d "$target" ;;
+        *.gz)            gunzip -c "$file" > "$target/$(basename "${file%.gz}")" ;;
+        *.bz2)           bunzip2 -c "$file" > "$target/$(basename "${file%.bz2}")" ;;
+        *.xz)            unxz -c "$file" > "$target/$(basename "${file%.xz}")" ;;
+        *)
+            echo "Error: '$file' has an unsupported extension."
+            rmdir "$target" 2>/dev/null
+            return 1
+            ;;
+    esac
+
+    echo "✅ Extraction complete: $target"
+}

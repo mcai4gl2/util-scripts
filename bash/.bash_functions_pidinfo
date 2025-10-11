@@ -1,0 +1,238 @@
+# pidinfo: show detailed CPU/memory/IO/threads/affinity/cgroups/etc for a PID
+# Usage:
+#   pidinfo <PID> [interval]
+#   pidinfo --json <PID> [interval]
+#   pidinfo --watch <PID> [interval]
+#   pidinfo --watch --json <PID> [interval]     # NDJSON stream (one JSON per sample)
+pidinfo() {
+  # -------- defaults --------
+  local want_json=0
+  local want_watch=0
+  local interval=
+  local pid=
+
+  # -------- parse args (flags can be anywhere) --------
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json)  want_json=1 ;;
+      --watch) want_watch=1 ;;
+      --help|-h)
+        echo "Usage: pidinfo [--json] [--watch] <PID> [interval_seconds]"
+        return 0
+        ;;
+      *)
+        # First number-like arg becomes PID; a second number-like arg becomes interval
+        if [ -z "$pid" ] && [ -n "$1" ] && [ "$1" -eq "$1" ] 2>/dev/null; then
+          pid="$1"
+        elif [ -z "$interval" ] && [ -n "$1" ] && [[ "$1" =~ ^([0-9]+|[0-9]*\.[0-9]+)$ ]]; then
+          interval="$1"
+        else
+          echo "pidinfo: unrecognized argument: $1" >&2
+          echo "Usage: pidinfo [--json] [--watch] <PID> [interval_seconds]" >&2
+          return 2
+        fi
+        ;;
+    esac
+    shift
+  done
+
+  if [ -z "$pid" ]; then
+    echo "Usage: pidinfo [--json] [--watch] <PID> [interval_seconds]" >&2
+    return 1
+  fi
+
+  if [ ! -d "/proc/$pid" ]; then
+    echo "PID $pid not found (no /proc/$pid)" >&2
+    return 1
+  fi
+
+  interval="${interval:-1}"
+
+  local hz ncpu
+  hz="$(getconf CLK_TCK 2>/dev/null || echo 100)"
+  ncpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1)"
+
+  # ----- helpers -----
+  _read_stat_totals() { awk '/^cpu /{s=0; for(i=2;i<=NF;i++) s+=$i; print s; exit}' /proc/stat; }
+  _read_pid_ticks()   { awk '{print $14+$15}' "/proc/$pid/stat" 2>/dev/null; }
+  _read_io_bytes()    {
+    awk '
+      /^read_bytes:/ {r=$2}
+      /^write_bytes:/ {w=$2}
+      END{print (r?r:0), (w?w:0)}
+    ' "/proc/$pid/io" 2>/dev/null
+  }
+  _json_escape() {
+    # minimal JSON string escaper: \, " and newlines/tabs
+    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g' -e 's/\t/\\t/g'
+  }
+
+  _one_sample() {
+    # Return captured metrics for one sampling window via global vars
+    local t0_sys t0_pid t0_rb t0_wb t1_sys t1_pid t1_rb t1_wb
+
+    t0_sys="$(_read_stat_totals)"
+    t0_pid="$(_read_pid_ticks)"
+    read -r t0_rb t0_wb < <(_read_io_bytes)
+    sleep "$interval"
+    # Process might exit during sleep:
+    if [ ! -d "/proc/$pid" ]; then
+      echo "pidinfo: PID $pid exited." >&2
+      return 2
+    fi
+    t1_sys="$(_read_stat_totals)"
+    t1_pid="$(_read_pid_ticks)"
+    read -r t1_rb t1_wb < <(_read_io_bytes)
+
+    # cpu%
+    local d_sys=$(( t1_sys - t0_sys ))
+    local d_pid=$(( (t1_pid>t0_pid)?(t1_pid - t0_pid):0 ))
+    cpu_pct="N/A"
+    if [ "$d_sys" -gt 0 ]; then
+      cpu_pct=$(awk -v dp="$d_pid" -v ds="$d_sys" -v n="$ncpu" 'BEGIN{printf "%.2f", (dp/ds)*100*n}')
+    fi
+
+    # IO rates
+    local drb=$(( t1_rb - t0_rb ))
+    local dwb=$(( t1_wb - t0_wb ))
+    rbps=$(awk -v b="$drb" -v s="$interval" 'BEGIN{printf "%.1f", (s>0)?(b/s):0}')
+    dwps=$(awk -v b="$dwb" -v s="$interval" 'BEGIN{printf "%.1f", (s>0)?(b/s):0}')
+    rb_total="$t1_rb"
+    wb_total="$t1_wb"
+
+    # Static-ish info per sample (some fields can change, e.g., threads)
+    comm="$(tr -d '\0' < "/proc/$pid/comm" 2>/dev/null)"
+    exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null)"
+    cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+    user_id="$(stat -c '%u' "/proc/$pid" 2>/dev/null)"
+    group_id="$(stat -c '%g' "/proc/$pid" 2>/dev/null)"
+    user_name="$(getent passwd "$user_id" 2>/dev/null | cut -d: -f1)"
+    group_name="$(getent group "$group_id" 2>/dev/null | cut -d: -f1)"
+    user="${user_name:-$user_id}"
+    group="${group_name:-$group_id}"
+
+    state= threads= vmsize= vmrss= vmswap=
+    while IFS=: read -r k v; do
+      kv="$(echo "$v" | xargs 2>/dev/null)"
+      case "$k" in
+        State)   state="$kv" ;;
+        Threads) threads="$kv" ;;
+        VmSize)  vmsize="$kv" ;;
+        VmRSS)   vmrss="$kv" ;;
+        VmSwap)  vmswap="$kv" ;;
+      esac
+    done < "/proc/$pid/status"
+
+    rss= anon= file= shmem= pss= swap= pssswap=
+    if [ -r "/proc/$pid/smaps_rollup" ]; then
+      while read -r k a b; do
+        case "$k" in
+          Rss:)     rss="$a $b" ;;
+          Pss:)     pss="$a $b" ;;
+          RssAnon:) anon="$a $b" ;;
+          RssFile:) file="$a $b" ;;
+          RssShmem:) shmem="$a $b" ;;
+          Swap:)    swap="$a $b" ;;
+          SwapPss:) pssswap="$a $b" ;;
+        esac
+      done < "/proc/$pid/smaps_rollup"
+    fi
+
+    cpus_allowed_list="$(awk -F: '/Cpus_allowed_list/{print $2}' "/proc/$pid/status" 2>/dev/null | xargs)"
+    if command -v taskset >/dev/null 2>&1; then
+      cpus_allowed_list="${cpus_allowed_list:-$(taskset -pc "$pid" 2>/dev/null | awk -F: '{print $2}' | xargs)}"
+    fi
+
+    fdcount="$(ls -1 "/proc/$pid/fd" 2>/dev/null | wc -l | xargs)"
+    maps_count="$(wc -l < "/proc/$pid/maps" 2>/dev/null || echo "N/A")"
+    cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null)"
+    rootdir="$(readlink -f "/proc/$pid/root" 2>/dev/null)"
+
+    read -r boot_uptime _ < /proc/uptime 2>/dev/null
+    start_ticks="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)"
+    start_secs=$(awk -v t="$start_ticks" -v HZ="$hz" 'BEGIN{printf "%.2f", t/HZ}')
+    proc_uptime=$(awk -v bu="$boot_uptime" -v ss="$start_secs" 'BEGIN{printf "%.2f", (bu-ss)}')
+    since_start="$(awk -v s="$proc_uptime" 'BEGIN{
+       d=int(s/86400); s-=d*86400; h=int(s/3600); s-=h*3600; m=int(s/60); s-=m*60;
+       printf("%dd %02dh %02dm %02ds", d, h, m, int(s)+0)}')"
+
+    cgroups="$(sed -E 's/^[0-9]+:[^:]*://; s#^/##' "/proc/$pid/cgroup" 2>/dev/null | paste -sd' | ' -)"
+
+    limits="$(awk 'NR==1 || /Max open files|Max address space|Max locked memory/{print}' "/proc/$pid/limits" 2>/dev/null)"
+  }
+
+  _print_human() {
+    printf "\033[H\033[2J"  # clear screen (harmless if not a TTY)
+    echo "────────────────────────────────────────────────────────"
+    echo "PID:            $pid"
+    echo "User/Group:     ${user:-?} / ${group:-?}"
+    echo "Command:        ${cmd:-$comm}"
+    echo "Exe:            ${exe:-N/A}"
+    echo "CWD:            ${cwd:-N/A}"
+    echo "Root:           ${rootdir:-/}"
+    echo
+    echo "State:          ${state:-N/A}"
+    echo "Threads:        ${threads:-N/A}"
+    echo "CPU(s):         $ncpu"
+    echo "Affinity:       ${cpus_allowed_list:-N/A}"
+    echo "CPU% (~${interval}s):  ${cpu_pct}%"
+    echo
+    echo "Memory (status): VmRSS=${vmrss:-N/A} | VmSize=${vmsize:-N/A} | VmSwap=${vmswap:-0 kB}"
+    if [ -n "$rss$anon$file$shmem$pss$swap$pssswap" ]; then
+      echo "Memory (smaps_rollup): Rss=${rss:-N/A} | Anon=${anon:-N/A} | File=${file:-N/A} | Shmem=${shmem:-N/A} | Pss=${pss:-N/A} | Swap=${swap:-0 kB}"
+    fi
+    echo
+    printf "I/O totals:     read_bytes=%'d  write_bytes=%'d\n" "${rb_total:-0}" "${wb_total:-0}"
+    echo "I/O rates:      read/s=${rbps} B/s  write/s=${dwps} B/s  (avg over ${interval}s)"
+    echo
+    echo "FDs open:       ${fdcount:-N/A}"
+    echo "VMAs (maps):    ${maps_count}"
+    echo
+    echo "Started:        ~${since_start} ago  (proc uptime)"
+    echo "Cgroups:        ${cgroups:-N/A}"
+    echo
+    echo "Key limits:"
+    echo "${limits:-N/A}"
+    echo "────────────────────────────────────────────────────────"
+  }
+
+  _print_json() {
+    # NDJSON if --watch (one line per sample)
+    # Escape strings safely
+    local j_cmd j_comm j_exe j_cwd j_root j_state j_aff j_cgroups j_limits
+    j_cmd="$(printf "%s" "${cmd:-$comm}" | _json_escape)"
+    j_comm="$(printf "%s" "${comm:-}" | _json_escape)"
+    j_exe="$(printf "%s" "${exe:-}" | _json_escape)"
+    j_cwd="$(printf "%s" "${cwd:-}" | _json_escape)"
+    j_root="$(printf "%s" "${rootdir:-/}" | _json_escape)"
+    j_state="$(printf "%s" "${state:-}" | _json_escape)"
+    j_aff="$(printf "%s" "${cpus_allowed_list:-}" | _json_escape)"
+    j_cgroups="$(printf "%s" "${cgroups:-}" | _json_escape)"
+    j_limits="$(printf "%s" "${limits:-}" | _json_escape)"
+    j_user="$(printf "%s" "${user:-}" | _json_escape)"
+    j_group="$(printf "%s" "${group:-}" | _json_escape)"
+
+    cat <<EOF
+{"pid":$pid,"interval_sec":$interval,"cpu":{"percent":$( [ "$cpu_pct" = "N/A" ] && echo null || echo "$cpu_pct") ,"ncpu":$ncpu,"affinity":"$j_aff"},"memory":{"VmRSS":"${vmrss:-}","VmSize":"${vmsize:-}","VmSwap":"${vmswap:-}","Rss":"${rss:-}","Anon":"${anon:-}","File":"${file:-}","Shmem":"${shmem:-}","Pss":"${pss:-}","Swap":"${swap:-}"},"io":{"read_bytes_total":${rb_total:-0},"write_bytes_total":${wb_total:-0},"read_Bps":$rbps,"write_Bps":$dwps},"proc":{"user":"$j_user","group":"$j_group","state":"$j_state","threads":$( [ -n "$threads" ] && echo "$threads" || echo null ),"cmd":"$j_cmd","comm":"$j_comm","exe":"$j_exe","cwd":"$j_cwd","root":"$j_root","uptime_human":"$(printf "%s" "$since_start" | _json_escape)"},"cgroups":"$j_cgroups","limits":"$j_limits"}
+EOF
+  }
+
+  # -------- run (single or watch loop) --------
+  if [ "$want_watch" -eq 1 ]; then
+    while :; do
+      _one_sample || return $?
+      if [ "$want_json" -eq 1 ]; then
+        _print_json
+      else
+        _print_human
+      fi
+    done
+  else
+    _one_sample || return $?
+    if [ "$want_json" -eq 1 ]; then
+      _print_json
+    else
+      _print_human
+    fi
+  fi
+}
