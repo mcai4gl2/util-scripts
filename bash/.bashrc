@@ -105,3 +105,7 @@ fi
 if [ -f ~/.bash_functions_pidinfo ]; then
     source ~/.bash_functions_pidinfo
 fi
+
+if [ -f ~/.bash_functions_dfx ]; then
+    source ~/.bash_functions_dfx
+fi

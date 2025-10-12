@@ -1,0 +1,71 @@
+dfx() {
+    local want_json=0
+    local threshold_yellow=70
+    local threshold_red=90
+    local args=()
+
+    # Parse flags
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json)
+                want_json=1
+                ;;
+            *)
+                args+=("$1")
+                ;;
+        esac
+        shift
+    done
+
+    if [ "$want_json" -eq 1 ]; then
+        # JSON output
+        echo "["
+        local first=1
+        df -hP "${args[@]}" | tail -n +2 | while read -r fs size used avail usep mount; do
+            [ -z "$fs" ] && continue
+            # Remove % sign
+            local use=${usep%%%}
+
+            # JSON escaping for mount points and fs names
+            esc_fs=$(printf '%s' "$fs" | sed 's/\\/\\\\/g; s/"/\\"/g')
+            esc_mount=$(printf '%s' "$mount" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+            if [ $first -eq 0 ]; then
+                echo ","
+            fi
+            first=0
+            cat <<EOF
+  {
+    "filesystem": "$esc_fs",
+    "size": "$size",
+    "used": "$used",
+    "available": "$avail",
+    "use_percent": $use,
+    "mounted_on": "$esc_mount"
+  }
+EOF
+        done
+        echo "]"
+    else
+        # Human-readable, color-coded output
+        local color_reset="\033[0m"
+        local color_green="\033[0;32m"
+        local color_yellow="\033[0;33m"
+        local color_red="\033[0;31m"
+
+        printf "%-25s %-10s %-10s %-10s %-8s %-s\n" "Filesystem" "Size" "Used" "Avail" "Use%" "Mounted on"
+        df -hP "${args[@]}" | tail -n +2 | while read -r fs size used avail usep mount; do
+            [ -z "$fs" ] && continue
+            local use=${usep%%%}
+            local color="$color_green"
+            if [ "$use" -ge "$threshold_red" ]; then
+                color="$color_red"
+            elif [ "$use" -ge "$threshold_yellow" ]; then
+                color="$color_yellow"
+            fi
+
+            printf "%-25s %-10s %-10s %-10s ${color}%-8s${color_reset} %-s\n" \
+                "$fs" "$size" "$used" "$avail" "$usep" "$mount"
+        done | sort -k5 -r -h | column -t
+    fi
+}
