@@ -5,7 +5,6 @@
 " ---- Basics
 set nocompatible
 set number relativenumber
-set mouse=a
 set ignorecase smartcase incsearch hlsearch
 set clipboard=unnamed,unnamedplus
 set wildmenu wildmode=longest:full,full
@@ -77,9 +76,9 @@ function! EasyCheat() abort
   \ '  <Space>db         : Delete current indent block',
   \ '',
   \ 'COMMENT (no plugin version)',
-  \ '  :s/^/\/\/ /       : Prefix lines with // (C-style)',
+  \ '  :s/^/\\/\\/ /       : Prefix lines with // (C-style)',
   \ '  :s/^/# /          : Prefix lines with # (shell)',
-  \ '  :%s/^/\/\/ /      : Comment entire file with //',
+  \ '  :%s/^/\\/\\/ /      : Comment entire file with //',
   \ '  (Tip: Visually select lines with V then run the :s command)',
   \ '',
   \ 'INDENT / FORMAT',
@@ -91,6 +90,8 @@ function! EasyCheat() abort
   \ '  0 / ^ / $         : Line start / first nonblank / end',
   \ '  w / b / e         : Next / Prev / End of word',
   \ '  Ctrl-d / Ctrl-u   : Half-page down / up',
+  \ '  Ctrl-f / Ctrl-b   : Page down / up (full screen)',
+  \ '  Ctrl-e / Ctrl-y   : Scroll line down / up',
   \ '  %                 : Jump matching () {} []',
   \ '',
   \ 'REGISTERS & CLIPBOARD',
@@ -179,6 +180,14 @@ vnoremap <leader>ii :<C-u>normal! gv<CR>
 nnoremap <leader>ai :<C-u>call EasyIndentOuter()<CR>gv
 vnoremap <leader>ai :<C-u>normal! gv<CR>
 nnoremap <leader>db :<C-u>call EasyIndentInner()<CR>gvd
+
+" ---------- Navigation shortcuts ----------
+" Page up/down shortcuts (Vim defaults already work: Ctrl-f/Ctrl-b)
+" But we can add additional mappings for clarity:
+nnoremap <PageDown> <C-f>
+nnoremap <PageUp> <C-b>
+nnoremap <End> G
+nnoremap <Home> gg
 
 " ---------- Buffer helpers ----------
 nnoremap <leader>bb :ls<CR>:b<Space>
