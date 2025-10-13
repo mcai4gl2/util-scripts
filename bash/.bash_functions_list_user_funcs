@@ -1,0 +1,12 @@
+list_user_funcs() {
+    echo "📂 Loaded function files:"
+    for f in "${USER_FUNCTION_FILES[@]}"; do
+        echo "  - $f"
+    done
+
+    echo
+    echo "⚡ Functions defined:"
+    for fn in "${USER_FUNCTION_NAMES[@]}"; do
+        echo "  - $fn"
+    done
+}

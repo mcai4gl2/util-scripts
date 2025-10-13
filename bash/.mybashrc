@@ -91,21 +91,39 @@ if command -v fzf >/dev/null 2>&1; then
   # bind -x '"\C-r": "READLINE_LINE=$(history | sed \"s/^[[:space:]]*[0-9]\+[[:space:]]*//\" | fzf --tac --reverse); READLINE_POINT=${#READLINE_LINE}"'
 fi
 
-if [ -f ~/.bash_functions_extract ]; then
-    source ~/.bash_functions_extract
-fi
+# Global array to hold names of loaded function files
+USER_FUNCTION_FILES=()
+
+# Global array to hold names of functions loaded from those files
+USER_FUNCTION_NAMES=()
+
+# Auto-load functions from ~/.bash_functions_* and ~/.bash_functions.d/*.sh
+shopt -s nullglob
+__user_function_sources=( "$HOME"/.bash_functions_* "$HOME"/.bash_functions.d/*.sh )
+shopt -u nullglob
+
+for f in "${__user_function_sources[@]}"; do
+    if [[ -f "$f" && -r "$f" ]]; then
+        # Get the list of functions BEFORE sourcing
+        local_before=($(declare -F | awk '{print $3}'))
+
+        # shellcheck source=/dev/null
+        source "$f"
+        USER_FUNCTION_FILES+=("$f")
+
+        # Get the list of functions AFTER sourcing
+        local_after=($(declare -F | awk '{print $3}'))
+
+        # Diff: new functions = after - before
+        for func in "${local_after[@]}"; do
+            if [[ ! " ${local_before[*]} " =~ " ${func} " ]]; then
+                USER_FUNCTION_NAMES+=("$func")
+            fi
+        done
+    fi
+done
+
+unset local_before local_after
 
 alias x=extract
-
-if [ -f ~/.bash_functions_tm ]; then
-    source ~/.bash_functions_tm
-fi
-
-
-if [ -f ~/.bash_functions_pidinfo ]; then
-    source ~/.bash_functions_pidinfo
-fi
-
-if [ -f ~/.bash_functions_dfx ]; then
-    source ~/.bash_functions_dfx
-fi
+alias list=list_user_funcs

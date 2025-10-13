@@ -10,6 +10,12 @@ dfx() {
             --json)
                 want_json=1
                 ;;
+            --yellow=*)
+                threshold_yellow="${1#*=}"
+                ;;
+            --red=*)
+                threshold_red="${1#*=}"
+                ;;
             *)
                 args+=("$1")
                 ;;
@@ -18,15 +24,14 @@ dfx() {
     done
 
     if [ "$want_json" -eq 1 ]; then
-        # JSON output
+        # JSON output (unchanged logic)
         echo "["
         local first=1
+        # -P for POSIX one-line per FS. Mountpoint with spaces is safe with read's last field.
         df -hP "${args[@]}" | tail -n +2 | while read -r fs size used avail usep mount; do
             [ -z "$fs" ] && continue
-            # Remove % sign
             local use=${usep%%%}
 
-            # JSON escaping for mount points and fs names
             esc_fs=$(printf '%s' "$fs" | sed 's/\\/\\\\/g; s/"/\\"/g')
             esc_mount=$(printf '%s' "$mount" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
@@ -46,26 +51,50 @@ dfx() {
 EOF
         done
         echo "]"
-    else
-        # Human-readable, color-coded output
-        local color_reset="\033[0m"
-        local color_green="\033[0;32m"
-        local color_yellow="\033[0;33m"
-        local color_red="\033[0;31m"
+        return 0
+    fi
 
-        printf "%-25s %-10s %-10s %-10s %-8s %-s\n" "Filesystem" "Size" "Used" "Avail" "Use%" "Mounted on"
+    # ----- Human-readable, perfectly aligned and colorized -----
+
+    # ANSI colors
+    local RS="\033[0m"
+    local GR="\033[0;32m"
+    local YE="\033[0;33m"
+    local RD="\033[0;31m"
+
+    # Build a clean TSV (tab-separated) without color, sort by numeric Use%
+    # We keep the percent as a pure number in col 5 for sorting.
+    {
+        printf "Filesystem\tSize\tUsed\tAvail\tUse%%\tMounted on\n"
         df -hP "${args[@]}" | tail -n +2 | while read -r fs size used avail usep mount; do
             [ -z "$fs" ] && continue
-            local use=${usep%%%}
-            local color="$color_green"
-            if [ "$use" -ge "$threshold_red" ]; then
-                color="$color_red"
-            elif [ "$use" -ge "$threshold_yellow" ]; then
-                color="$color_yellow"
-            fi
+            use=${usep%%%}
+            # Tab-separated row: fs  size  used  avail  use(plain number)  mount(with spaces ok)
+            printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$fs" "$size" "$used" "$avail" "$use" "$mount"
+        done | sort -k5,5nr
+    } |
+    # Align by tabs
+    column -s $'\t' -t |
+    # Colorize the Use% column *after* alignment so spacing stays intact.
+    awk -v y="$threshold_yellow" -v r="$threshold_red" \
+        -v RS="$RS" -v GR="$GR" -v YE="$YE" -v RD="$RD" '
+        BEGIN { OFS="  " }  # column already aligned using spaces; keep spacing
+        NR==1 {
+            print; next
+        }
+        {
+            # Find the 5th column (Use%)
+            # Split on runs of at least two spaces to be robust to spacing between columns.
+            n = split($0, cols, /  +/)
+            # cols[5] should look like "NN"
+            # But after column it’s "NN" (no %), because we printed NN; add % for display.
+            use = cols[5] + 0
+            color = (use>=r)? RD : (use>=y? YE : GR)
+            cols[5] = color use "%" RS
 
-            printf "%-25s %-10s %-10s %-10s ${color}%-8s${color_reset} %-s\n" \
-                "$fs" "$size" "$used" "$avail" "$usep" "$mount"
-        done | sort -k5 -r -h | column -t
-    fi
+            # Reconstruct line with two spaces between columns
+            out = cols[1]
+            for (i=2; i<=n; i++) out = out "  " cols[i]
+            print out
+        }'
 }

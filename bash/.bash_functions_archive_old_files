@@ -1,0 +1,101 @@
+archive_old_files() {
+    local target_dir="."
+    local regex=".*"
+    local age="30d"
+    local apply_mode=0
+
+    # Parse args
+    for arg in "$@"; do
+        case $arg in
+            --dir=*)   target_dir="${arg#*=}" ;;
+            --regex=*) regex="${arg#*=}" ;;
+            --age=*)   age="${arg#*=}" ;;
+            --apply)   apply_mode=1 ;;
+            --help|-h)
+                cat <<'EOF'
+Usage: archive_old_files [--dir=PATH] [--regex=REGEX] [--age=Nd|Nmin] [--apply]
+  --dir=PATH     Target folder (default: .)
+  --regex=REGEX  Extended regex on BASENAME (default: .*)
+  --age=30d      Age threshold; supports Nd (days) or Nmin (minutes)
+  --apply        Actually create per-file .tar.gz in place and delete originals
+Dry-run is default: it only prints what would be done.
+EOF
+                return 0
+                ;;
+            *)
+                echo "❌ Unknown arg: $arg" >&2; return 1 ;;
+        esac
+    done
+
+    [[ -d "$target_dir" ]] || { echo "❌ No such dir: $target_dir" >&2; return 1; }
+
+    # Parse age -> minutes
+    local mins
+    if [[ "$age" =~ ^([0-9]+)d$ ]]; then
+        mins=$(( ${BASH_REMATCH[1]} * 1440 ))
+    elif [[ "$age" =~ ^([0-9]+)min$ ]]; then
+        mins=${BASH_REMATCH[1]}
+    else
+        echo "❌ Invalid --age: $age (use Nd or Nmin, e.g., 1d, 90d, 120min)" >&2
+        return 1
+    fi
+
+    # Collect (basename, fullpath) pairs as NUL-separated
+    mapfile -d '' matched < <(
+        find "$target_dir" -maxdepth 1 -type f -mmin +"$mins" -printf '%f\0%p\0'
+    )
+
+    # Filter by regex on basename and gather full paths
+    local paths=()
+    for ((i=0; i<${#matched[@]}; i+=2)); do
+        local base="${matched[i]}"
+        local full="${matched[i+1]}"
+        [[ "$base" =~ $regex ]] && paths+=( "$full" )
+    done
+
+    if (( ${#paths[@]} == 0 )); then
+        echo "ℹ️ No files matched (dir='$target_dir', age>$age, regex='$regex')."
+        return 0
+    fi
+
+    if (( apply_mode == 0 )); then
+        echo "📝 Dry-run: would create per-file archives and remove originals:"
+        for p in "${paths[@]}"; do
+            echo "  $(basename "$p")  →  $(basename "$p").tar.gz"
+        done
+        echo "👉 Use --apply to execute."
+        return 0
+    fi
+
+    echo "📦 Applying: per-file in-place .tar.gz + delete originals ..."
+    local ok=0 fail=0
+    for p in "${paths[@]}"; do
+        # Create archive path right next to the file
+        local dir base archive
+        dir="$(dirname -- "$p")"
+        base="$(basename -- "$p")"
+        archive="$dir/$base.tar.gz"
+
+        # Avoid overwriting an existing archive; if exists, append timestamp
+        if [[ -e "$archive" ]]; then
+            archive="$dir/$base.$(date +'%Y%m%d_%H%M%S').tar.gz"
+        fi
+
+        # Create tar with basename only (so archive doesn’t store full path)
+        if tar -czf "$archive" -C "$dir" -- "$base"; then
+            # Remove original after successful archive
+            if rm -f -- "$p"; then
+                printf '  ✔ %s → %s\n' "$base" "$(basename -- "$archive")"
+                ((ok++))
+            else
+                printf '  ✖ failed to remove original: %s\n' "$p" >&2
+                ((fail++))
+            fi
+        else
+            printf '  ✖ failed to archive: %s\n' "$p" >&2
+            ((fail++))
+        fi
+    done
+
+    echo "✅ Done. Success: $ok  Fail: $fail"
+}
