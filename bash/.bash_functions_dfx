@@ -56,14 +56,17 @@ EOF
 
     # ----- Human-readable, perfectly aligned and colorized -----
 
-    # ANSI colors
-    local RS="\033[0m"
-    local GR="\033[0;32m"
-    local YE="\033[0;33m"
-    local RD="\033[0;31m"
+    # ANSI colors as strings to avoid awk issues
+    local reset_color=$(printf '\033[0m')
+    local green_color=$(printf '\033[0;32m') 
+    local yellow_color=$(printf '\033[0;33m')
+    local red_color=$(printf '\033[0;31m')
 
+    # To preserve alignment while adding colors, we'll use a different approach:
+    # 1. Use column to align the columns first
+    # 2. Then post-process each line to inject color codes without changing spacing
+    
     # Build a clean TSV (tab-separated) without color, sort by numeric Use%
-    # We keep the percent as a pure number in col 5 for sorting.
     {
         printf "Filesystem\tSize\tUsed\tAvail\tUse%%\tMounted on\n"
         df -hP "${args[@]}" | tail -n +2 | while read -r fs size used avail usep mount; do
@@ -74,27 +77,60 @@ EOF
         done | sort -k5,5nr
     } |
     # Align by tabs
-    column -s $'\t' -t |
-    # Colorize the Use% column *after* alignment so spacing stays intact.
-    awk -v y="$threshold_yellow" -v r="$threshold_red" \
-        -v RS="$RS" -v GR="$GR" -v YE="$YE" -v RD="$RD" '
-        BEGIN { OFS="  " }  # column already aligned using spaces; keep spacing
-        NR==1 {
-            print; next
-        }
-        {
-            # Find the 5th column (Use%)
-            # Split on runs of at least two spaces to be robust to spacing between columns.
-            n = split($0, cols, /  +/)
-            # cols[5] should look like "NN"
-            # But after column it’s "NN" (no %), because we printed NN; add % for display.
-            use = cols[5] + 0
-            color = (use>=r)? RD : (use>=y? YE : GR)
-            cols[5] = color use "%" RS
+    column -s $'\t' -t > /tmp/dfx_aligned_output
 
-            # Reconstruct line with two spaces between columns
-            out = cols[1]
-            for (i=2; i<=n; i++) out = out "  " cols[i]
-            print out
-        }'
+    # Process header separately
+    head -n 1 /tmp/dfx_aligned_output
+    
+    # Process data lines with coloring
+    tail -n +2 /tmp/dfx_aligned_output | while read -r line; do
+        if [ -n "$line" ]; then
+            # Extract usage percentage from the line
+            # Since it's aligned, we can use awk to parse fields
+            usage=$(echo "$line" | awk '{print $5}')
+            
+            # Determine color based on threshold
+            if [ "$usage" -ge "$threshold_red" ]; then
+                color="$red_color"
+            elif [ "$usage" -ge "$threshold_yellow" ]; then
+                color="$yellow_color"
+            else
+                color="$green_color"
+            fi
+            
+            # Replace the percentage field with colored version
+            # We need to preserve the exact spacing, so let's reconstruct
+            echo "$line" | awk -v usage="$usage" -v color="$color" -v reset="$reset_color" '
+            {
+                # Find the percentage field and replace it, preserving alignment
+                # Rather than changing $0, we reconstruct the line with colors
+                # but need to preserve exact spacing
+                
+                # Get the original line
+                orig = $0
+                
+                # The hard part is replacing the field while keeping spacing
+                # Let us split by spaces but preserve the original spacing pattern
+                # Find where the usage percentage appears and replace it with color codes
+                # without changing the field width
+                
+                # Find the position where the field starts
+                field_str = " " usage " "
+                pos = index($0, field_str)
+                if (pos > 0) {
+                    # Replace the number with colored version
+                    before = substr($0, 1, pos)
+                    after = substr($0, pos + length(field_str) + 1)
+                    print before color usage "%" reset after
+                } else {
+                    # Alternative: replace "usage%" pattern
+                    gsub(usage "%", color usage "%" reset, $0)
+                    print $0
+                }
+            }'
+        fi
+    done
+    
+    # Clean up temp file
+    rm -f /tmp/dfx_aligned_output
 }
