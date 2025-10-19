@@ -1,0 +1,109 @@
+# cdf: fuzzy "cd" into a directory by typing any distinguishing part.
+# - Uses fzf if available; otherwise falls back to substring search + selection.
+# - Search root: current directory (.)
+# - By default, ignores hidden dirs (set CDF_INCLUDE_HIDDEN=1 to include).
+# - Limit depth with CDF_MAXDEPTH (default 5). Set to 0 to search all depths.
+# - Case-insensitive matching when CDF_CASE_INSENSITIVE=1 (default 1).
+#
+# Examples:
+#   cdf logs
+#   cdf src/test
+#   CDF_MAXDEPTH=2 cdf build
+#   CDF_INCLUDE_HIDDEN=1 cdf .git
+cdf() {
+  local query="${1:-}"
+  local root="."
+  local maxdepth="${CDF_MAXDEPTH:-5}"
+  local include_hidden="${CDF_INCLUDE_HIDDEN:-0}"
+  local icase="${CDF_CASE_INSENSITIVE:-1}"
+
+  # Build find command
+  local -a find_cmd=(find "$root")
+  if [[ "$maxdepth" != "0" ]]; then
+    find_cmd+=(-maxdepth "$maxdepth")
+  fi
+  # Exclude hidden by default
+  if [[ "$include_hidden" != "1" ]]; then
+    find_cmd+=(-not -path '*/.*')
+  fi
+  find_cmd+=(-type d -print)
+
+  # Helper: safely switch directory and show where we went
+  __cdf_cd() {
+    builtin cd -- "$1" && printf '→ %s\n' "$PWD"
+  }
+
+  # If fzf is available, use it (interactive; query pre-filled if provided)
+  if command -v fzf >/dev/null 2>&1; then
+    # Generate list, drop the leading "./" for prettiness but keep absolute with -printf? We'll keep relative.
+    local dir
+    if [[ -n "$query" ]]; then
+      dir="$("${find_cmd[@]}" 2>/dev/null | fzf --height=40% --reverse --query="$query" --select-1 --exit-0)"
+    else
+      dir="$("${find_cmd[@]}" 2>/dev/null | fzf --height=40% --reverse --select-1 --exit-0)"
+    fi
+    if [[ -n "$dir" ]]; then
+      __cdf_cd "$dir"
+      return
+    else
+      echo "cdf: no selection" >&2
+      return 1
+    fi
+  fi
+
+  # ---- Fallback (no fzf): substring matching with numbered menu ----
+  # Collect candidates
+  # Use case-insensitive or sensitive matching based on icase.
+  local -a candidates=()
+  if [[ -n "$query" ]]; then
+    if [[ "$icase" == "1" ]]; then
+      # case-insensitive
+      while IFS= read -r d; do candidates+=("$d"); done < <("${find_cmd[@]}" 2>/dev/null | grep -iF -- "$query")
+    else
+      while IFS= read -r d; do candidates+=("$d"); done < <("${find_cmd[@]}" 2>/dev/null | grep -F -- "$query")
+    fi
+  else
+    # No query: list immediate dirs only to avoid spam
+    local -a md_cmd=(find "$root" -maxdepth 1 -type d -print)
+    if [[ "$include_hidden" != "1" ]]; then
+      md_cmd=(find "$root" -maxdepth 1 -not -path '*/.*' -type d -print)
+    fi
+    while IFS= read -r d; do candidates+=("$d"); done < <("${md_cmd[@]}" 2>/dev/null)
+  fi
+
+  # Remove '.' to avoid cd'ing to the same place unless it’s the only match
+  local -a filtered=()
+  for d in "${candidates[@]}"; do
+    [[ "$d" == "." ]] && continue
+    filtered+=("$d")
+  done
+  candidates=("${filtered[@]}")
+
+  local cnt="${#candidates[@]}"
+  if (( cnt == 0 )); then
+    echo "cdf: no directory matches found." >&2
+    return 1
+  elif (( cnt == 1 )); then
+    __cdf_cd "${candidates[0]}"
+    return
+  fi
+
+  # Multiple matches: present a numbered chooser
+  echo "Multiple matches:"
+  local i=1
+  for d in "${candidates[@]}"; do
+    printf '  [%d] %s\n' "$i" "$d"
+    ((i++))
+  done
+
+  local choice
+  while true; do
+    read -r -p "Choose 1..$cnt (or blank to cancel): " choice
+    [[ -z "$choice" ]] && echo "cdf: cancelled." && return 1
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= cnt )); then
+      __cdf_cd "${candidates[choice-1]}"
+      return
+    fi
+    echo "Invalid choice."
+  done
+}
