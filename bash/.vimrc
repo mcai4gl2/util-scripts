@@ -37,7 +37,8 @@ function! EasyCheat() abort
   \ 'BASICS',
   \ '  i / a / o         : Insert before/after / new line below',
   \ '  Esc               : Back to Normal mode',
-  \ '  u / Ctrl-r        : Undo / Redo',
+  \ '  u / Ctrl-z         : Undo',
+  \ '  Ctrl-r             : Redo',
   \ '  dd / yy / p       : Delete line / Yank (copy) line / Paste',
   \ '  x / X             : Delete char under / before cursor',
   \ '  .                 : Repeat last change',
@@ -46,6 +47,7 @@ function! EasyCheat() abort
   \ '  <Space>w          : Save (write)',
   \ '  <Space>x          : Save & close current buffer',
   \ '  <Space>q          : Save & quit (window)',
+  \ '  <Space>z          : Suspend (job control; was Ctrl-Z)',
   \ '',
   \ 'SEARCH',
   \ '  /text             : Search forward; n / N next/prev match',
@@ -131,10 +133,16 @@ nnoremap <F1> :call EasyCheat()<CR>
 " Quality-of-life mappings (no plugins)
 " =========================
 
+" Undo on Ctrl-Z (override suspend); keep consistent across modes
+nnoremap <C-z> u
+inoremap <C-z> <C-o>u
+xnoremap <C-z> <Esc>u
+
 " Save / Quit
 nnoremap <leader>w :update<CR>
 nnoremap <leader>x :update <bar> :bd<CR>
 nnoremap <leader>q :update <bar> :q<CR>
+nnoremap <leader>z :suspend<CR>
 
 " Search navigation on function keys
 nnoremap <F3> n
